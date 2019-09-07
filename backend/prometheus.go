@@ -4,6 +4,7 @@ package backend
 import (
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -16,7 +17,7 @@ func (backend *Config) Describe(ch chan<- *prometheus.Desc) {
 // Collect : Implementation of Prometheus Collector.Collect
 func (backend *Config) Collect(ch chan<- prometheus.Metric) {
 
-	log.Println("Prometheus is requesting metrics")
+	log.Println("prometheus: requesting metrics")
 
 	request := make(chan Point, 100)
 	done := make(chan bool)
@@ -24,18 +25,41 @@ func (backend *Config) Collect(ch chan<- prometheus.Metric) {
 
 	select {
 	case *queries <- channels:
-		log.Println("Prometheus requested metrics")
+		log.Println("prometheus: requested metrics")
 	default:
-		log.Println("Query buffer full. Discarding request")
+		log.Println("prometheus: query buffer full. discarding request")
 		return
 	}
 
+	// points recieved
+	points := 0
+	// handle timeout between point reception
+	rectimer := time.NewTimer(100 * time.Millisecond)
+	// check that the collection threads have finished
+	recdone := false
 	for {
 		select {
 		case point := <-*channels.Request:
+			// reset timer
+			if !rectimer.Stop() {
+				select {
+				case <-rectimer.C:
+				default:
+				}
+			}
+			rectimer.Reset(100 * time.Millisecond)
+			// increase points
+			points++
+			// send point to prometheus
 			backend.PrometheusSend(ch, point)
 		case <-*channels.Done:
-			return
+			recdone = true
+		case <-rectimer.C:
+			// only exit when done and timeout
+			if recdone {
+				log.Printf("prometheus: sent %d points", points)
+				return
+			}
 		}
 	}
 }

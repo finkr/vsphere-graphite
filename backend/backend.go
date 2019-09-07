@@ -18,9 +18,9 @@ import (
 
 	influxclient "github.com/influxdata/influxdb1-client/v2"
 	graphite "github.com/marpaia/graphite-golang"
-	"github.com/olivere/elastic"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	elastic "gopkg.in/olivere/elastic.v5"
 )
 
 // Channels are use for unscheduled backend
@@ -153,7 +153,9 @@ func (backend *Config) Init() (*chan Channels, error) {
 		go func() error {
 			address := ""
 			if len(backend.Hostname) > 0 {
-				address = backend.Hostname
+				if backend.Hostname != "*" {
+					address = backend.Hostname
+				}
 			}
 			if backend.Port > 0 {
 				address += ":" + utils.ValToString(backend.Port, "", false)
@@ -376,7 +378,7 @@ func (backend *Config) SendMetrics(metrics []*Point, cleanup bool) {
 			}
 			err := backend.fluent.Post(backend.Prefix, *point)
 			if err != nil {
-				log.Printf("bakcend %s: failed to post point - %s\n", backendType, err)
+				log.Printf("backend %s: failed to post point - %s\n", backendType, err)
 			}
 		}
 	case ThinPrometheus:

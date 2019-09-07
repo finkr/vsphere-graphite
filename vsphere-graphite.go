@@ -11,6 +11,7 @@ import (
 	"path"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"runtime"
 	"runtime/debug"
 	"runtime/pprof"
@@ -31,8 +32,9 @@ import (
 
 const (
 	// name of the service
-	name        = "vsphere-graphite"
-	description = "send vsphere stats to graphite"
+	name          = "vsphere-graphite"
+	description   = "send vsphere stats to graphite"
+	vcenterdefreg = "^VCENTER_.+=(?P<username>.+):(?P<password>.+)@(?P<hostname>.+)$"
 )
 
 var dependencies = []string{}
@@ -72,18 +74,18 @@ func (service *Service) Manage() (string, error) {
 	}
 
 	log.Println("Starting daemon:", path.Base(os.Args[0]))
-	
+
 	// find file location
 	basename := path.Base(os.Args[0])
 	configname := strings.TrimSuffix(basename, filepath.Ext(basename))
 	location := "/etc/" + configname + ".json"
-	if _, err := os.Stat(location); err!=nil {
-		location = "./" + configname + ".json"
-		if _, err := os.Stat(location); err!=nil {
-			return "Could not find config location in './' or '/etc'", err
+	if _, err := os.Stat(location); err != nil {
+		location = configname + ".json"
+		if _, err := os.Stat(location); err != nil {
+			return "Could not find config location in '.' or '/etc'", err
 		}
 	}
-	
+
 	// read the configuration
 	file, err := os.Open(location) // #nosec
 	if err != nil {
@@ -153,15 +155,71 @@ func (service *Service) Manage() (string, error) {
 				//environment variable set with name
 				switch ftype := f.Type().Name(); ftype {
 				case "string":
+					log.Printf("setting config value %s from env. '%s'", s.Type().Field(i).Name, envval)
 					f.SetString(envval)
 				case "int":
 					val, err := strconv.ParseInt(envval, 10, 64) // nolint: vetshadow
 					if err == nil {
+						log.Printf("setting config value %s from env. %d", s.Type().Field(i).Name, val)
 						f.SetInt(val)
 					}
 				}
 			}
 		}
+	}
+
+	//force vcenter values to environment variables if present
+	envvcenters := []*vsphere.VCenter{}
+	validvcenter := regexp.MustCompile(vcenterdefreg)
+	for _, e := range os.Environ() {
+		// check if a vcenter definition
+		if strings.HasPrefix(e, "VCENTER_") {
+			if !validvcenter.MatchString(e) {
+				log.Printf("cannot parse vcenter: '%s'\n", e)
+				continue
+			}
+			matches := validvcenter.FindStringSubmatch(e)
+			names := validvcenter.SubexpNames()
+			username := ""
+			password := ""
+			hostname := ""
+			for i, match := range matches {
+				if i == 0 {
+					continue
+				}
+				switch names[i] {
+				case "username":
+					username = match
+				case "password":
+					password = match
+				case "hostname":
+					hostname = match
+				}
+			}
+			if len(username) == 0 {
+				log.Printf("cannot find username in vcenter: '%s'", e)
+				continue
+			}
+			if len(password) == 0 {
+				log.Printf("cannot find password in vcenter: '%s'", e)
+				continue
+			}
+			if len(hostname) == 0 {
+				log.Printf("cannot find hostname in vcenter: '%s'", e)
+				continue
+			}
+			vcenter := vsphere.VCenter{
+				Username: username,
+				Password: password,
+				Hostname: hostname,
+			}
+			log.Printf("adding vcenter from env: %s", vcenter.ToString())
+			envvcenters = append(envvcenters, &vcenter)
+		}
+	}
+	if len(envvcenters) > 0 {
+		conf.VCenters = envvcenters
+		log.Println("config vcenter have been replaced by those in env")
 	}
 
 	for _, vcenter := range conf.VCenters {
@@ -261,6 +319,7 @@ func (service *Service) Manage() (string, error) {
 					go queryVCenter(*vcenter, conf, request.Request, &wg)
 				}
 				wg.Wait()
+				//time.Sleep(5 * time.Second)
 				*request.Done <- true
 				cleanup <- true
 			}()
@@ -291,7 +350,8 @@ func (service *Service) Manage() (string, error) {
 				runtime.GC()
 				debug.FreeOSMemory()
 				runtime.ReadMemStats(&memstats)
-				log.Printf("Memory usage : sys=%s alloc=%s\n", bytefmt.ByteSize(memstats.Sys), bytefmt.ByteSize(memstats.Alloc))
+				log.Printf("memory usage: sys=%s alloc=%s\n", bytefmt.ByteSize(memstats.Sys), bytefmt.ByteSize(memstats.Alloc))
+				log.Printf("go routines: %d", runtime.NumGoroutine())
 				if conf.MEMProfiling {
 					f, err := os.OpenFile("/tmp/vsphere-graphite-mem.pb.gz", os.O_RDWR|os.O_CREATE, 0600) // nolin.vetshaddow
 					if err != nil {

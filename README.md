@@ -1,6 +1,6 @@
 # vSphere Graphite [![Tweet](https://img.shields.io/twitter/url/http/shields.io.svg?style=social)](Open+up++your+%20vmware+%20vsphere+statistics+with+https://github.com/cblomart/vsphere-graphite)
 
-[![Build Status](https://cloud.drone.io/api/badges/cblomart/vsphere-graphite/status.svg)](https://cloud.drone.io/cblomart/vsphere-graphite) [![Go Report Card](https://goreportcard.com/badge/github.com/cblomart/vsphere-graphite)](https://goreportcard.com/report/github.com/cblomart/vsphere-graphite) [![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fcblomart%2Fvsphere-graphite.svg?type=shield)](https://app.fossa.io/projects/git%2Bgithub.com%2Fcblomart%2Fvsphere-graphite?ref=badge_shield)
+[![Build Status](https://cloud.drone.io/api/badges/cblomart/vsphere-graphite/status.svg)](https://cloud.drone.io/cblomart/vsphere-graphite) [![Go Report Card](https://goreportcard.com/badge/github.com/cblomart/vsphere-graphite)](https://goreportcard.com/report/github.com/cblomart/vsphere-graphite) [![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fcblomart%2Fvsphere-graphite.svg?type=shield)](https://app.fossa.io/projects/git%2Bgithub.com%2Fcblomart%2Fvsphere-graphite?ref=badge_shield) [![Donate with Bitcoin](https://en.cryptobadges.io/badge/micro/1BQqpYfQc9NqykaK4rEH5bFsik1VffKHmQ)](https://en.cryptobadges.io/donate/1BQqpYfQc9NqykaK4rEH5bFsik1VffKHmQ)
 
 Monitors VMware vSphere stats using govmomi. Sinks metrics to one of many time series backends.
 
@@ -24,8 +24,13 @@ The dashboard example below is using the grafana UI. The backend is using Elasti
 
 Define vSphere credentials and collection metrics in the JSON config file. An example configuration for the Contoso domain is found [here](./vsphere-graphite-example.json).
 
-Copy this config file to /etc/*binaryname*.json and modify as needed. Example:
-  > cp vsphere-graphite-example.json /etc/vsphere-graphite.json
+Copy this config file to /etc/*binaryname*.json and modify as needed. 
+As in windows "/etc" doesn't exist, the configuration file should be placed in the same directory as the vsphere-graphite binary.
+
+Example:
+> cp vsphere-graphite-example.json /etc/vsphere-graphite.json
+
+
 
 <!-- provide link to vcenter roles and permissions -->
 
@@ -50,18 +55,39 @@ You can select the extra data collected by using the "Properties" property:
 * disks: reports the logical disks capacity inside the virtua machine
 * **all**: reports all the information
 
+### vCenter parameters
+
+vCenter parameters can be set in the configuration file or via environement variable.
+
+The configuration file needs the username, password and hostname of the vCenter (from [sample config](./vsphere-graphite-example.json)):
+
+```json
+"VCenters": [
+    { "Username": "CONTOSO\\Administrator", "Password": "$P@ssw0rd", "Hostname": "vc1.contoso.com" },
+    { "Username": "CONTOSO\\Administrator", "Password": "$P@ssw0rd", "Hostname": "vc2.contoso.com" }
+]
+```
+
+If set via environement variable you can set multiple vcenters via ```VCENTER_*=<username>:<password>@<hostname>```
+
+To follow the example given in the sample file:
+```
+VCENTER_VC1=CONTOSO\\Administrator:$P@ssw0rd@vc1.consoso.com
+VCENTER_VC2=CONTOSO\\Administrator:$P@ssw0rd@vc2.consoso.com
+```
+
 ### Backend parameters
 
 Backend parameters can be set in the config and will allways be overriden by environment variables.
 This allows to use a generic config in a container image and set the backend by environement variables.
 
-* Type (BACKEND_TYPE): 
+* Type (CONFIG_TYPE): 
 
   Type of backend to use.
 
   Currently "graphite", "influxdb", "thinfluxdb" (embeded influx client), "elastic", "prometheus", "thinprometheus" (embeded prometheus) and "fluentd"
 
-* Hostname (BACKEND_HOSTNAME): 
+* Hostname (CONFIG_HOSTNAME):
 
   Hostname were the backend is running.
 
@@ -69,13 +95,13 @@ This allows to use a generic config in a container image and set the backend by 
   
   i.e: 127.0.0.1 would limit to localhost.
 
-* Port (BACKEND_PORT): 
+* Port (CONFIG_PORT):
 
   Port to connect to for the backend.
 
   Prometheus will use this to choose which port to listen to. By default it listens to port 9155.
- 
-* Encrypted (BACKEND_ENCRYPTED): 
+
+* Encrypted (CONFIG_ENCRYPTED):
 
   Enable or disable TLS to the backend (true, false).
 
@@ -85,30 +111,30 @@ This allows to use a generic config in a container image and set the backend by 
 > Prometheus suppport for this would require certificate management.
 >
 
-* Username (BACKEND_USERNAME): 
+* Username (CONFIG_USERNAME):
 
   Username to connect to the backend.
 
   Only supported by "influx" and "thininflux" backends.
   
-* Password (BACKEND_PASSWORD): 
+* Password (CONFIG_PASSWORD):
 
   Password to connect to the backend.
 
   Only supported by "influx" and "thininflux" backends.
 
-* Database (BACKEND_DATABASE):
+* Database (CONFIG_DATABASE):
 
   Database to use in the backend.
 
   Only supported by "influx", "thininflux" and "elastic".
 
-* NoArray (BACKEND_NOARRAY): 
+* NoArray (CONFIG_NOARRAY):
 
   Multiple values metadata will be send as csv 'array' by default (NoArray is true by default).
   If set to false, only the first element is sent.
 
-* Prefix (BACKEND_PREFIX): 
+* Prefix (CONFIG_PREFIX):
 
   Prefix to use in the backend.
 
@@ -130,6 +156,27 @@ The JSON configration file can be passed by mounting to /etc. Edit the configura
   > docker run -t -v $(pwd)/vsphere-graphite.json:/etc/vsphere-graphite.json cblomart/vsphere-graphite:latest
 
 Backend parameters can be set via environment variables to make docker user easier (having graphite or influx as another container).
+
+## Execute vsphere-graphite in swarm (docker-compose)
+
+A sample [docker compose file](./compose/vsphere-graphite-graphite-test.yml) is provided in the project.
+this sample will start:
+
+* vcsim ([vCenter simulator by govmomi](https://github.com/vmware/govmomi/tree/master/vcsim))
+* graphite (["Offical" Graphite docker image](https://hub.docker.com/r/graphiteapp/graphite-statsd/)) the port 80 will be published to access the web interface.
+* vsphere-graphite with the necessary environement parameters to address the started backend and vcenter
+
+To start this with swarm:
+
+```bash
+> docker stack deploy -v vsphere-graphite-graphite-test.yml vsphere-graphite
+```
+
+> Did you know that you can run docker stack on a standalone host... so no need for docker-compose. Just:
+>
+> ```bash
+> > docker swarm init
+> ```
 
 ## Execute vsphere-graphite in shell
 
@@ -191,9 +238,7 @@ So don't hesitate and tell us what doesn't work or what you miss.
 
 ## Donations
 
-This project is largely alive because of the forementioned contributors. Our time is precious bet it is even more precious to us when we can spend it on our beloved projects. So don't hesitate to make a donation:
-
-Bitcoin address: 1BQqpYfQc9NqykaK4rEH5bFsik1VffKHmQ
+This project is largely alive because of the forementioned contributors. Our time is precious bet it is even more precious to us when we can spend it on our beloved projects. So don't hesitate to make a donation (see badge)
 
 ## License
 

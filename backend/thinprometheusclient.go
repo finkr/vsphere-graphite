@@ -32,7 +32,9 @@ func NewThinPrometheusClient(server string, port int) (ThinPrometheusClient, err
 	}
 	address := ""
 	if len(server) > 0 {
-		address = server
+		if server != "*" {
+			address = server
+		}
 	}
 	address = fmt.Sprintf("%s:%d", address, port)
 	return ThinPrometheusClient{Hostname: server, Port: port, address: address}, nil
@@ -40,7 +42,7 @@ func NewThinPrometheusClient(server string, port int) (ThinPrometheusClient, err
 
 // ListenAndServe will start the listen thead for metric requests
 func (client *ThinPrometheusClient) ListenAndServe() error {
-	log.Printf("Start listening for metric request at %s\n", client.address)
+	log.Printf("thinprom: start listening for metric request at %s\n", client.address)
 	return fasthttp.ListenAndServe(client.address, fasthttp.CompressHandlerLevel(requestHandler, 9))
 }
 
@@ -55,41 +57,48 @@ func requestHandler(ctx *fasthttp.RequestCtx) {
 	channels := Channels{Request: &request, Done: &done}
 	// create a buffer to organise metrics per type
 	buffer := map[string][]string{}
-	log.Println("Thin Prometheus Sending Query Request")
+	log.Println("thinprom: sending query request")
 	// start the queriess
 	select {
 	case *queries <- channels:
-		log.Println("Thin Prometheus Sent Query Request")
+		log.Println("thinprom: sent query Request")
 	default:
 		ctx.Error("Query buffer full", fasthttp.StatusConflict)
 		return
 	}
 	// start a timeout
-	timeout := time.NewTimer(10 * time.Second)
-	// wait for the results
-	wait := true
-	log.Println("Thin Prometheus is waiting for query results")
-	for wait {
+	timeout := time.NewTimer(100 * time.Millisecond)
+	// collected points
+	points := 0
+	// recieve done
+	recdone := false
+	log.Println("Tthinprom: waiting for query results")
+L:
+	for {
 		select {
 		case point := <-*channels.Request:
 			// reset timer
 			if !timeout.Stop() {
-				<-timeout.C
+				select {
+				case <-timeout.C:
+				default:
+				}
 			}
-			timeout.Reset(10 * time.Second)
+			timeout.Reset(100 * time.Millisecond)
+			// increased recieved points
+			points++
 			// add point to the buffer
 			addToThinPrometheusBuffer(buffer, &point)
 		case <-*channels.Done:
 			// finish consuming metrics and break loop
-			log.Println("Thin Prometheus was signaled the end of the collection")
-			wait = false
+			log.Println("thinprom: signaled the end of the collection")
+			recdone = true
 		case <-timeout.C:
 			// stop timer
-			timeout.Stop()
-			log.Println("Thin Prometheus was signaled a timeout")
-			wait = false
-			ctx.Error("Timeout while gathering data", fasthttp.StatusRequestTimeout)
-			return
+			if recdone {
+				log.Printf("thinprom: sent %d points", points)
+				break L
+			}
 		}
 	}
 	ctx.SetContentType("text/plain; charset=utf8")
@@ -110,11 +119,11 @@ func requestHandler(ctx *fasthttp.RequestCtx) {
 		}
 		_, err := ctx.Write(outbuff.Bytes())
 		if err != nil {
-			log.Printf("Error writing to buffer %s\n", err)
+			log.Printf("thinpro: error writing to buffer %s\n", err)
 		}
 		outbuff.Reset()
 	}
-	log.Println("Thin Prometheus Sended Response to request")
+	log.Println("thinprom: sended response to request")
 }
 
 func addToThinPrometheusBuffer(metrics map[string][]string, point *Point) {

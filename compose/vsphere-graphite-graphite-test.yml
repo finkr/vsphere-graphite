@@ -1,0 +1,36 @@
+version: '3'
+
+services:
+  vcenter:
+    image: cblomart/vcsim
+    deploy:
+      restart_policy:
+        delay: 5s
+        max_attempts: 3
+        window: 30s
+
+  graphite:
+    image: graphiteapp/graphite-statsd
+    ports:
+      - "80"
+    deploy:
+      restart_policy:
+        delay: 5s
+        max_attempts: 3
+        window: 30s
+
+  vsphere-graphite:
+    image: cblomart/vsphere-graphite:9ebd547
+    environment:
+      - VCENTER_VCSIM=user:pass@vcenter:8989
+      - CONFIG_TYPE=graphite
+      - CONFIG_HOSTNAME=graphite
+      - CONFIG_PORT=2003
+    depends_on:
+      - vcenter
+      - graphite
+    deploy:
+      restart_policy:
+        delay: 10s
+        max_attempts: 3
+        window: 120s

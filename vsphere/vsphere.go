@@ -41,6 +41,11 @@ type VCenter struct {
 	MetricGroups []*MetricGroup
 }
 
+// ToString : represents the vcenter as a string
+func (vcenter *VCenter) ToString() string {
+	return fmt.Sprintf("%s:*@%s", vcenter.Username, vcenter.Hostname)
+}
+
 // AddMetric : add a metric definition to a metric group
 func (vcenter *VCenter) AddMetric(metric *MetricDef, mtype string) {
 	// find the metric group for the type
@@ -528,11 +533,15 @@ func ExecuteQueries(ctx context.Context, id int, r soap.RoundTripper, cache *Cac
 	requestedcount := len(queryperf.QuerySpec)
 	log.Printf("vcenter %s thread %d: requesting %d metrics\n", vcName, id, requestedcount)
 
+	// tell the waitgroup we are done when exiting
+	defer func() {
+		if wg != nil {
+			wg.Done()
+		}
+	}()
+
 	// Query the performances
 	perfres, err := methods.QueryPerf(ctx, r, queryperf)
-
-	// Tell the waitgroup that we are done
-	wg.Done()
 
 	// Check the result
 	if err != nil {
@@ -555,6 +564,8 @@ func ExecuteQueries(ctx context.Context, id int, r soap.RoundTripper, cache *Cac
 	// no need to wait here because this is only processing (no connection to vcenter needed)
 	totalvms := 0
 	totalhosts := 0
+	var metricProcessWaitGroup sync.WaitGroup
+	metricProcessWaitGroup.Add(len(perfres.Returnval))
 	for _, base := range perfres.Returnval {
 		pem := base.(*types.PerfEntityMetric)
 		switch pem.Entity.Type {
@@ -563,7 +574,7 @@ func ExecuteQueries(ctx context.Context, id int, r soap.RoundTripper, cache *Cac
 		case "HostSystem":
 			totalhosts++
 		}
-		go ProcessMetric(cache, pem, timeStamp, replacepoint, domain, vcName, channel)
+		go ProcessMetric(cache, pem, timeStamp, replacepoint, domain, vcName, channel, &metricProcessWaitGroup)
 	}
 	// log total object refrenced
 	log.Printf("vcenter %s thread %d: %d objects (%d vm and %d hosts)", vcName, id, totalhosts+totalvms, totalvms, totalhosts)
@@ -595,10 +606,19 @@ func ExecuteQueries(ctx context.Context, id int, r soap.RoundTripper, cache *Cac
 			log.Printf("vcenter %s thread %d: missing metrics for %s", vcName, id, missmorefs[i])
 		}
 	}
+
+	// wait for metric processing
+	metricProcessWaitGroup.Wait()
 }
 
 // ProcessMetric : Process Metric to metric queue
-func ProcessMetric(cache *Cache, pem *types.PerfEntityMetric, timeStamp int64, replacepoint bool, domain string, vcName string, channel *chan backend.Point) {
+func ProcessMetric(cache *Cache, pem *types.PerfEntityMetric, timeStamp int64, replacepoint bool, domain string, vcName string, channel *chan backend.Point, wg *sync.WaitGroup) {
+	// tell the wait group that we are finished at exit
+	defer func() {
+		if wg != nil {
+			wg.Done()
+		}
+	}()
 	// name checks the name of the object
 	name := cache.FindString(vcName, "names", pem.Entity.Value)
 	name = strings.ToLower(strings.Replace(name, domain, "", -1))
